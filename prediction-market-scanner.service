@@ -1,0 +1,16 @@
+[Unit]
+Description=Prediction Market Arbitrage Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/python3 /opt/scripts/prediction-market-scanner.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
