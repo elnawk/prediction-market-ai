@@ -657,6 +657,13 @@ def run_scan():
 
     # Log
     write_log(spread_arbs, cross_arbs, mispricings, scan_time, counts)
+    
+    # Save all markets to JSON for Phase 2 analysis
+    markets_file = Path("/home/ubuntu/.openclaw/workspace/notes/markets.json")
+    markets_file.parent.mkdir(parents=True, exist_ok=True)
+    markets_file.write_text(json.dumps(all_markets, indent=2))
+    log.info(f"Saved {len(all_markets)} markets to {markets_file}")
+    
     return spread_arbs, cross_arbs, mispricings
 
 
@@ -665,6 +672,10 @@ def main():
     log.info(f"Platforms: Polymarket, Limitless, Predict.fun")
     log.info(f"Interval: {SCAN_INTERVAL}s | Spread: {INTRA_SPREAD_THRESHOLD*100}% | Cross: {CROSS_ARB_THRESHOLD*100}% | AI: {MISPRICING_THRESHOLD*100}%")
 
+    # Check for --once flag for one-shot collection
+    import sys
+    one_shot = "--once" in sys.argv
+    
     while True:
         try:
             spreads, cross, misps = run_scan()
@@ -675,6 +686,10 @@ def main():
                 log.info("No opportunities this scan.")
         except Exception as e:
             log.error(f"Scan error: {e}", exc_info=True)
+
+        if one_shot:
+            log.info("One-shot mode: exiting after first scan")
+            break
 
         log.info(f"Sleeping {SCAN_INTERVAL}s...")
         time.sleep(SCAN_INTERVAL)
