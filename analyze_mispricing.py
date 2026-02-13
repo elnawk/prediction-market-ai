@@ -31,24 +31,36 @@ logging.basicConfig(
 log = logging.getLogger("mispricing")
 
 
-def call_claude(prompt: str, max_tokens: int = 2000) -> Optional[str]:
-    """Call Smart Router (localhost:4001) for Claude inference."""
-    try:
-        body = {
-            "model": "claude-sonnet-4-5-20250929",  # Will auto-route to haiku if simple
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        resp = requests.post(SMART_ROUTER, json=body, timeout=60)
-        if resp.status_code != 200:
-            log.error(f"Smart Router returned {resp.status_code}: {resp.text[:200]}")
-            return None
-        data = resp.json()
-        text = data.get("content", [{}])[0].get("text", "")
-        return text.strip()
-    except Exception as e:
-        log.error(f"Claude call failed: {e}")
-        return None
+def call_claude(prompt: str, max_tokens: int = 2000, retries: int = 3) -> Optional[str]:
+    """Call Smart Router (localhost:4001) for Claude inference with retry."""
+    for attempt in range(retries):
+        try:
+            body = {
+                "model": "claude-sonnet-4-5-20250929",  # Will auto-route to haiku if simple
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+            resp = requests.post(SMART_ROUTER, json=body, timeout=60)
+            if resp.status_code != 200:
+                log.warning(f"Smart Router returned {resp.status_code} (attempt {attempt+1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                return None
+            data = resp.json()
+            text = data.get("content", [{}])[0].get("text", "")
+            return text.strip()
+        except requests.Timeout:
+            log.warning(f"Claude call timeout (attempt {attempt+1}/{retries})")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+        except Exception as e:
+            log.error(f"Claude call failed: {e} (attempt {attempt+1}/{retries})")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+    return None
 
 
 def analyze_market(market: dict) -> Optional[dict]:
@@ -135,12 +147,27 @@ def load_markets() -> list:
         if path.exists():
             try:
                 data = json.loads(path.read_text())
-                log.info(f"Loaded {len(data)} markets from {path}")
-                return data
+                if not data:
+                    log.warning(f"{path} is empty")
+                    continue
+                # Validate market data
+                valid_markets = []
+                for m in data:
+                    if not isinstance(m, dict):
+                        continue
+                    # Check required fields and price sanity
+                    yes_price = m.get("yes_price", 0)
+                    no_price = m.get("no_price", 0)
+                    if yes_price < 0 or yes_price > 1 or no_price < 0 or no_price > 1:
+                        log.warning(f"Invalid prices for market {m.get('id')}: yes={yes_price}, no={no_price}")
+                        continue
+                    valid_markets.append(m)
+                log.info(f"Loaded {len(valid_markets)}/{len(data)} valid markets from {path}")
+                return valid_markets
             except Exception as e:
                 log.warning(f"Failed to load {path}: {e}")
     
-    log.warning("No market data found — scanner may not have run yet")
+    log.error("No market data found — scanner may not have run yet")
     return []
 
 
@@ -177,7 +204,10 @@ def main():
     # Load markets
     markets = load_markets()
     if not markets:
-        log.error("No markets to analyze — exiting")
+        log.error("No markets to analyze — scanner may have failed")
+        # Create empty report to indicate failure
+        OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT_FILE.write_text(f"# Mispricing Analysis Failed\n\nLast attempt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nNo market data available. Scanner may have failed.\n")
         return
     
     # Filter: only high-volume/liquidity markets

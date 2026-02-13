@@ -143,23 +143,35 @@ def _parse_polymarket(m):
         return None
 
 
-def fetch_limitless(limit=500):
-    """Fetch active Limitless markets."""
+def fetch_limitless(limit=500, max_retries=3):
+    """Fetch active Limitless markets with retry."""
     markets = []
-    try:
-        resp = requests.get(
-            f"{LIMITLESS_API}/markets/active",
-            timeout=30
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw = data.get("data", []) if isinstance(data, dict) else data
-        for m in raw[:limit]:
-            parsed = _parse_limitless(m)
-            if parsed:
-                markets.append(parsed)
-    except Exception as e:
-        log.error(f"Limitless fetch error: {e}")
+    for retry in range(max_retries):
+        try:
+            resp = requests.get(
+                f"{LIMITLESS_API}/markets/active",
+                timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw = data.get("data", []) if isinstance(data, dict) else data
+            for m in raw[:limit]:
+                parsed = _parse_limitless(m)
+                if parsed:
+                    markets.append(parsed)
+            break  # Success
+        except requests.Timeout:
+            log.warning(f"Limitless timeout (retry {retry+1}/{max_retries})")
+            if retry < max_retries - 1:
+                time.sleep(2 ** retry)
+            else:
+                log.error(f"Limitless failed after {max_retries} retries")
+        except Exception as e:
+            log.warning(f"Limitless error: {e} (retry {retry+1}/{max_retries})")
+            if retry < max_retries - 1:
+                time.sleep(2 ** retry)
+            else:
+                log.error(f"Limitless failed after {max_retries} retries")
     log.info(f"Limitless: {len(markets)} markets")
     return markets
 
